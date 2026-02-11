@@ -1,5 +1,10 @@
 import { Request, Response } from "express";
-import { createJob, getJobById } from "./job.service";
+import {
+  createJob,
+  getJobById,
+  getAllJobs,
+  updateJobStatus
+} from "./job.service";
 
 export const handleCreateJob = async (req: Request, res: Response) => {
   try {
@@ -31,5 +36,39 @@ export const handleGetJob = async (req: Request, res: Response) => {
 
   } catch (error) {
     return res.status(500).json({ message: "Error fetching job" });
+  }
+};
+
+export const handleGetAllJobs = async (req: Request, res: Response) => {
+  try {
+    const jobs = await getAllJobs();
+    return res.json(jobs);
+
+  } catch (error) {
+    return res.status(500).json({ message: "Error fetching jobs" });
+  }
+};
+
+export const handleUpdateJobStatus = async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { status } = req.body;
+
+    const allowedStatuses = ["queued", "processing", "completed", "failed"];
+
+    if (!allowedStatuses.includes(status)) {
+      return res.status(400).json({ message: "Invalid status value" });
+    }
+
+    const updatedJob = await updateJobStatus(id, status);
+
+    if (!updatedJob) {
+      return res.status(404).json({ message: "Job not found" });
+    }
+
+    return res.json(updatedJob);
+
+  } catch (error) {
+    return res.status(500).json({ message: "Error updating job" });
   }
 };
