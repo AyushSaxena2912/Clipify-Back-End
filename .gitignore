@@ -1,3 +1,7 @@
-node_modules/
 .env
-dist/
+node_modules
+venv
+storage
+dist
+backend/node_modules
+backend/.env

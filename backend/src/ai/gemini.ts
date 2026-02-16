@@ -11,40 +11,43 @@ const model = genAI.getGenerativeModel({
 });
 
 export const detectHighlightsWithGemini = async (
-  transcriptText: string
+  transcriptText: string,
+  clipCount: number = 3
 ) => {
   try {
+    // Safety trim (avoid huge token overflow)
+    const safeTranscript =
+      transcriptText.length > 25000
+        ? transcriptText.slice(0, 25000)
+        : transcriptText;
+
     const prompt = `
-You are a world-class viral content editor, retention analyst, 
+You are a world-class viral content editor, retention analyst,
 and short-form algorithm expert (YouTube Shorts, Reels, TikTok).
 
-Your job is to extract ONLY the most viral, high-retention, 
-dopamine-spiking moments from this transcript.
-
 STRICT OBJECTIVE:
-Maximize watch time, emotional intensity, curiosity, and replay value.
+Extract EXACTLY ${clipCount} high-retention viral clips.
 
 SELECTION CRITERIA:
-Select moments that include emotional spikes, bold claims, secrets,
+Select emotional spikes, bold claims, secrets,
 money stories, transformation, controversy, humor, value bombs.
 
 REJECT greetings, context setup, repetition, sponsor talk,
 generic advice, neutral tone.
 
 CLIP RULES:
-• Each clip must feel COMPLETE.
+• Each clip must feel COMPLETE
 • Minimum duration: 18 seconds
 • Maximum duration: 65 seconds
-• First 3 seconds must be powerful.
-• Last line must feel impactful.
+• First 3 seconds must hook strongly
+• Ending must feel impactful
 
 LANGUAGE:
 Auto-detect English, Hindi, Hinglish.
 Preserve original language.
 Do NOT translate.
 
-OUTPUT FORMAT:
-Return STRICT JSON array:
+OUTPUT FORMAT (STRICT JSON ARRAY ONLY):
 
 [
   {
@@ -58,30 +61,33 @@ Return STRICT JSON array:
 ]
 
 IMPORTANT:
+Return EXACTLY ${clipCount} clips.
 Return ONLY JSON.
 No markdown.
 No explanation.
 
 Transcript:
-${transcriptText}
+${safeTranscript}
 `;
 
     const result = await model.generateContent(prompt);
     const response = result.response;
     let text = response.text();
 
-    // 🔥 Clean markdown if Gemini adds it
+    // Clean markdown wrapping if Gemini adds it
     text = text.replace(/```json/g, "").replace(/```/g, "").trim();
 
-    // 🔥 Parse safely
     const parsed = JSON.parse(text);
 
-    return parsed;
+    // Final safety guard
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+
+    return parsed.slice(0, clipCount);
 
   } catch (error) {
     console.error("Gemini error:", error);
-
-    // Fallback so worker doesn't crash
     return [];
   }
 };

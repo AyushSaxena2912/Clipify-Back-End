@@ -17,70 +17,72 @@ type Highlight = {
   reason?: string;
 };
 
-/* -------------------------------------------------- */
-/* 🧱 ENSURE FOLDERS                                  */
-/* -------------------------------------------------- */
+/* -------------------------------- */
+/* LOG HELPER                       */
+/* -------------------------------- */
+
+const log = (jobId: string, message: string) => {
+  console.log(`[JOB ${jobId}] ${message}`);
+};
+
+/* -------------------------------- */
+/* ENSURE FOLDERS                   */
+/* -------------------------------- */
 
 const ensureFolders = () => {
-  console.log("📁 Checking storage folders...");
-
   const folders = [
     "storage/videos",
     "storage/audio",
     "storage/transcripts",
     "storage/highlights",
-    "storage/clips"
+    "storage/clips",
   ];
 
   folders.forEach((folder) => {
     if (!fs.existsSync(folder)) {
       fs.mkdirSync(folder, { recursive: true });
-      console.log(`   ➕ Created: ${folder}`);
+      console.log(`Created folder: ${folder}`);
     }
   });
-
-  console.log("✅ Folder check complete\n");
 };
 
-/* -------------------------------------------------- */
-/* ⬇ DOWNLOAD VIDEO                                   */
-/* -------------------------------------------------- */
+/* -------------------------------- */
+/* DOWNLOAD VIDEO                   */
+/* -------------------------------- */
 
 const downloadVideo = async (url: string, jobId: string) => {
   const outputPath = path.join("storage/videos", `${jobId}.mp4`);
-
-  console.log(`⬇ [${jobId}] Downloading video...`);
+  log(jobId, "Starting video download...");
 
   await execAsync(
     `yt-dlp -f mp4 -o "${outputPath}" "${url}"`,
     { maxBuffer: 1024 * 1024 * 50 }
   );
 
-  console.log(`✅ [${jobId}] Video downloaded`);
+  log(jobId, "Video downloaded successfully.");
   return outputPath;
 };
 
-/* -------------------------------------------------- */
-/* 🎵 EXTRACT AUDIO                                   */
-/* -------------------------------------------------- */
+/* -------------------------------- */
+/* EXTRACT AUDIO                    */
+/* -------------------------------- */
 
 const extractAudio = async (videoPath: string, jobId: string) => {
   const audioPath = path.join("storage/audio", `${jobId}.mp3`);
-
-  console.log(`🎵 [${jobId}] Extracting audio...`);
+  log(jobId, "Extracting audio...");
 
   await execAsync(
     `ffmpeg -i "${videoPath}" -vn -acodec libmp3lame "${audioPath}" -y`,
     { maxBuffer: 1024 * 1024 * 50 }
   );
 
-  console.log(`✅ [${jobId}] Audio extracted`);
+  log(jobId, "Audio extracted.");
   return audioPath;
 };
 
-/* -------------------------------------------------- */
-/* 🧠 TRANSCRIBE                                      */
-/* -------------------------------------------------- */
+/* -------------------------------- */
+/* TRANSCRIBE                       */
+/* -------------------------------- */
 
 const transcribeAudio = async (audioPath: string, jobId: string) => {
   const transcriptPath = path.join(
@@ -88,19 +90,19 @@ const transcribeAudio = async (audioPath: string, jobId: string) => {
     `${jobId}.json`
   );
 
-  console.log(`🧠 [${jobId}] Transcribing audio...`);
+  log(jobId, "Starting transcription...");
 
   await execAsync(
     `venv/bin/python scripts/transcribe.py "${audioPath}" "${transcriptPath}"`
   );
 
-  console.log(`✅ [${jobId}] Transcript generated`);
+  log(jobId, "Transcription completed.");
   return transcriptPath;
 };
 
-/* -------------------------------------------------- */
-/* ✂ CUT CLIP (WITH AUDIO SAFE)                      */
-/* -------------------------------------------------- */
+/* -------------------------------- */
+/* CUT CLIP                         */
+/* -------------------------------- */
 
 const cutClip = async (
   videoPath: string,
@@ -112,38 +114,32 @@ const cutClip = async (
 ) => {
   const duration = end - start;
 
-  console.log(
-    `✂ [${jobId}] Cutting clip ${index} (${start.toFixed(
-      2
-    )} → ${end.toFixed(2)})`
-  );
+  log(jobId, `Cutting clip ${index} (${start}s → ${end}s)...`);
 
   await execAsync(
     `ffmpeg -ss ${start} -i "${videoPath}" -t ${duration} -c:v libx264 -c:a aac -movflags +faststart "${outputPath}" -y`
   );
 
-  console.log(`   ✅ Clip ${index} created`);
+  log(jobId, `Clip ${index} created.`);
 };
 
-/* -------------------------------------------------- */
-/* 🚀 WORKER                                          */
-/* -------------------------------------------------- */
+/* -------------------------------- */
+/* WORKER                           */
+/* -------------------------------- */
 
 const startWorker = async () => {
-  console.log("🚀 Worker started...\n");
+  console.log("Worker started and waiting for jobs...");
   ensureFolders();
 
   while (true) {
     let jobId: string | null = null;
 
     try {
-      console.log("📦 Waiting for job in Redis...\n");
-
       const job = await redis.brpop("jobQueue", 0);
       if (!job) continue;
 
       jobId = job[1];
-      console.log(`🎯 Processing job: ${jobId}\n`);
+      log(jobId, "Job received from queue.");
 
       const result = await pool.query(
         `SELECT * FROM jobs WHERE id = $1`,
@@ -152,7 +148,7 @@ const startWorker = async () => {
 
       const jobData = result.rows[0];
       if (!jobData) {
-        console.log("❌ Job not found in DB\n");
+        log(jobId, "Job not found in database.");
         continue;
       }
 
@@ -161,27 +157,40 @@ const startWorker = async () => {
         [jobId]
       );
 
-      /* ===== PIPELINE ===== */
+      log(jobId, "Status updated to processing.");
+
+      /* -------- PIPELINE -------- */
 
       const videoPath = await downloadVideo(jobData.url, jobId);
       const audioPath = await extractAudio(videoPath, jobId);
       const transcriptPath = await transcribeAudio(audioPath, jobId);
 
-      /* Read transcript */
-      console.log(`📖 [${jobId}] Reading transcript...`);
+      log(jobId, "Reading transcript file...");
       const transcriptRaw = fs.readFileSync(transcriptPath, "utf-8");
       const transcriptJson = JSON.parse(transcriptRaw);
       const transcriptText: string = transcriptJson.text;
 
-      /* Gemini */
-      console.log(`🤖 [${jobId}] Generating highlights...`);
+      /* -------- CLIP COUNT -------- */
+
+      const clipCount =
+        typeof jobData.clip_count === "number" &&
+        jobData.clip_count > 0
+          ? jobData.clip_count
+          : 3;
+
+      log(jobId, `Requested clip count: ${clipCount}`);
+
+      /* -------- GEMINI -------- */
+
+      log(jobId, "Sending transcript to Gemini...");
 
       let highlights: Highlight[] = [];
 
       try {
-        const raw = await detectHighlightsWithGemini(transcriptText);
-        const parsed =
-          typeof raw === "string" ? JSON.parse(raw) : raw;
+        const parsed = await detectHighlightsWithGemini(
+          transcriptText,
+          clipCount
+        );
 
         if (Array.isArray(parsed)) {
           highlights = parsed.filter(
@@ -191,16 +200,16 @@ const startWorker = async () => {
               clip.end > clip.start
           );
         }
-
-        console.log(
-          `🎯 [${jobId}] ${highlights.length} valid highlights found`
-        );
-
       } catch (e) {
-        console.error("❌ Gemini parsing error:", e);
+        log(jobId, "Gemini error occurred.");
       }
 
-      /* Save highlights */
+      highlights = highlights.slice(0, clipCount);
+
+      log(jobId, `Gemini returned ${highlights.length} clips.`);
+
+      /* -------- SAVE HIGHLIGHTS -------- */
+
       const highlightsPath = path.join(
         "storage/highlights",
         `${jobId}.json`
@@ -211,9 +220,10 @@ const startWorker = async () => {
         JSON.stringify(highlights, null, 2)
       );
 
-      console.log(`💾 [${jobId}] Highlights saved\n`);
+      log(jobId, "Highlights saved to storage.");
 
-      /* CUT CLIPS */
+      /* -------- CUT CLIPS -------- */
+
       const clipsDir = path.join("storage/clips", jobId);
       fs.mkdirSync(clipsDir, { recursive: true });
 
@@ -221,6 +231,7 @@ const startWorker = async () => {
 
       for (let i = 0; i < highlights.length; i++) {
         const clip = highlights[i];
+
         const outputClipPath = path.join(
           clipsDir,
           `clip_${i + 1}.mp4`
@@ -238,8 +249,7 @@ const startWorker = async () => {
         generatedClips.push(outputClipPath);
       }
 
-      /* Update DB */
-      console.log(`💾 [${jobId}] Updating database...`);
+      /* -------- UPDATE DB -------- */
 
       await pool.query(
         `UPDATE jobs
@@ -257,17 +267,19 @@ const startWorker = async () => {
         ]
       );
 
-      console.log(`🎉 [${jobId}] JOB COMPLETED\n`);
-      console.log("========================================\n");
+      log(jobId, "Database updated.");
+      log(jobId, "Job completed successfully.");
+      console.log("--------------------------------------------------");
 
     } catch (err) {
-      console.error("🔥 Worker error:", err);
+      console.error("Worker error:", err);
 
       if (jobId) {
         await pool.query(
           `UPDATE jobs SET status = 'failed' WHERE id = $1`,
           [jobId]
         );
+        log(jobId, "Job marked as failed.");
       }
     }
   }
