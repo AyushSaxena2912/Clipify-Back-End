@@ -3,13 +3,9 @@ import { checkJobRateLimit } from "../../utils/jobRateLimiter";
 import {
   createJob,
   getJobById,
-  getAllJobs,
-  updateJobStatus
+  getAllJobs
 } from "./job.service";
 import { AuthRequest } from "../auth/auth.middleware";
-
-const allowedStatuses = ["queued", "processing", "completed", "failed"] as const;
-type JobStatus = typeof allowedStatuses[number];
 
 /* --------------------------- */
 /* CREATE JOB                  */
@@ -36,7 +32,7 @@ export const handleCreateJob = async (
       });
     }
 
-    // 🔥 Rate limit check (10 per hour)
+    // Rate limit check (10 per hour)
     const allowed = await checkJobRateLimit(userId);
     if (!allowed) {
       return res.status(429).json({
@@ -80,24 +76,39 @@ export const handleGetJob = async (
     const { id } = req.params;
 
     if (!userId) {
-      return res.status(401).json({ success: false, message: "Unauthorized" });
+      return res.status(401).json({
+        success: false,
+        message: "Unauthorized"
+      });
     }
 
     if (!id) {
-      return res.status(400).json({ success: false, message: "Job ID is required" });
+      return res.status(400).json({
+        success: false,
+        message: "Job ID is required"
+      });
     }
 
     const job = await getJobById(id, userId);
 
     if (!job) {
-      return res.status(404).json({ success: false, message: "Job not found" });
+      return res.status(404).json({
+        success: false,
+        message: "Job not found"
+      });
     }
 
-    return res.json({ success: true, data: job });
+    return res.json({
+      success: true,
+      data: job
+    });
 
   } catch (error) {
     console.error("Get Job Error:", error);
-    return res.status(500).json({ success: false, message: "Internal server error" });
+    return res.status(500).json({
+      success: false,
+      message: "Internal server error"
+    });
   }
 };
 
@@ -113,7 +124,10 @@ export const handleGetAllJobs = async (
     const userId = req.user?.userId;
 
     if (!userId) {
-      return res.status(401).json({ success: false, message: "Unauthorized" });
+      return res.status(401).json({
+        success: false,
+        message: "Unauthorized"
+      });
     }
 
     const jobs = await getAllJobs(userId);
@@ -126,49 +140,9 @@ export const handleGetAllJobs = async (
 
   } catch (error) {
     console.error("Get All Jobs Error:", error);
-    return res.status(500).json({ success: false, message: "Internal server error" });
-  }
-};
-
-
-/* --------------------------- */
-/* UPDATE STATUS               */
-/* --------------------------- */
-export const handleUpdateJobStatus = async (
-  req: AuthRequest,
-  res: Response
-) => {
-  try {
-    const userId = req.user?.userId;
-    const { id } = req.params;
-    const { status } = req.body as { status: JobStatus };
-
-    if (!userId) {
-      return res.status(401).json({ success: false, message: "Unauthorized" });
-    }
-
-    if (!id) {
-      return res.status(400).json({ success: false, message: "Job ID is required" });
-    }
-
-    if (!status || !allowedStatuses.includes(status)) {
-      return res.status(400).json({ success: false, message: "Invalid status value" });
-    }
-
-    const updatedJob = await updateJobStatus(id, userId, status);
-
-    if (!updatedJob) {
-      return res.status(404).json({ success: false, message: "Job not found" });
-    }
-
-    return res.json({
-      success: true,
-      message: "Job status updated",
-      data: updatedJob
+    return res.status(500).json({
+      success: false,
+      message: "Internal server error"
     });
-
-  } catch (error) {
-    console.error("Update Status Error:", error);
-    return res.status(500).json({ success: false, message: "Internal server error" });
   }
 };

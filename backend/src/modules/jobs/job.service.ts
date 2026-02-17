@@ -12,22 +12,19 @@ export const createJob = async (
 ) => {
   const id = uuidv4();
 
-  await pool.query(
+  const result = await pool.query(
     `
     INSERT INTO jobs (id, user_id, url, status, clip_count)
     VALUES ($1, $2, $3, $4, $5)
+    RETURNING *
     `,
     [id, userId, url, "queued", clipCount]
   );
 
-  await redis.lpush("jobQueue", id);
+  // Push to download queue
+  await redis.lpush("queue:download", id);
 
-  const result = await pool.query(
-    `SELECT * FROM jobs WHERE id = $1 AND user_id = $2`,
-    [id, userId]
-  );
-
-  return result.rows[0] ?? null;
+  return result.rows[0];
 };
 
 
@@ -93,7 +90,7 @@ export const updateJobStatus = async (
         ELSE completed_at
       END
     WHERE id = $5
-    AND user_id = $6
+      AND user_id = $6
     RETURNING *
     `,
     [

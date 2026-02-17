@@ -8,26 +8,21 @@ import { detectHighlightsWithGemini } from "../ai/gemini";
 
 const execAsync = promisify(exec);
 
+const role = process.argv[2];
+
+if (!["download", "transcribe", "render"].includes(role)) {
+  console.error("Provide worker role: download | transcribe | render");
+  process.exit(1);
+}
+
 type Highlight = {
   start: number;
   end: number;
-  title?: string;
-  hook?: string;
-  viral_score?: number;
-  reason?: string;
 };
-
-/* -------------------------------- */
-/* LOG HELPER                       */
-/* -------------------------------- */
 
 const log = (jobId: string, message: string) => {
-  console.log(`[JOB ${jobId}] ${message}`);
+  console.log(`[${role.toUpperCase()}][JOB ${jobId}] ${message}`);
 };
-
-/* -------------------------------- */
-/* ENSURE FOLDERS                   */
-/* -------------------------------- */
 
 const ensureFolders = () => {
   const folders = [
@@ -41,48 +36,29 @@ const ensureFolders = () => {
   folders.forEach((folder) => {
     if (!fs.existsSync(folder)) {
       fs.mkdirSync(folder, { recursive: true });
-      console.log(`Created folder: ${folder}`);
     }
   });
 };
 
-/* -------------------------------- */
-/* DOWNLOAD VIDEO                   */
-/* -------------------------------- */
+/* ------------------ HELPERS ------------------ */
 
 const downloadVideo = async (url: string, jobId: string) => {
   const outputPath = path.join("storage/videos", `${jobId}.mp4`);
-  log(jobId, "Starting video download...");
-
   await execAsync(
     `yt-dlp -f mp4 -o "${outputPath}" "${url}"`,
     { maxBuffer: 1024 * 1024 * 50 }
   );
-
-  log(jobId, "Video downloaded successfully.");
   return outputPath;
 };
 
-/* -------------------------------- */
-/* EXTRACT AUDIO                    */
-/* -------------------------------- */
-
 const extractAudio = async (videoPath: string, jobId: string) => {
   const audioPath = path.join("storage/audio", `${jobId}.mp3`);
-  log(jobId, "Extracting audio...");
-
   await execAsync(
     `ffmpeg -i "${videoPath}" -vn -acodec libmp3lame "${audioPath}" -y`,
     { maxBuffer: 1024 * 1024 * 50 }
   );
-
-  log(jobId, "Audio extracted.");
   return audioPath;
 };
-
-/* -------------------------------- */
-/* TRANSCRIBE                       */
-/* -------------------------------- */
 
 const transcribeAudio = async (audioPath: string, jobId: string) => {
   const transcriptPath = path.join(
@@ -90,56 +66,45 @@ const transcribeAudio = async (audioPath: string, jobId: string) => {
     `${jobId}.json`
   );
 
-  log(jobId, "Starting transcription...");
-
   await execAsync(
-    `venv/bin/python scripts/transcribe.py "${audioPath}" "${transcriptPath}"`
+    `venv/bin/python scripts/transcribe.py "${audioPath}" "${transcriptPath}"`,
+    { maxBuffer: 1024 * 1024 * 50 }
   );
 
-  log(jobId, "Transcription completed.");
   return transcriptPath;
 };
-
-/* -------------------------------- */
-/* CUT CLIP                         */
-/* -------------------------------- */
 
 const cutClip = async (
   videoPath: string,
   start: number,
   end: number,
-  outputPath: string,
-  jobId: string,
-  index: number
+  outputPath: string
 ) => {
   const duration = end - start;
 
-  log(jobId, `Cutting clip ${index} (${start}s → ${end}s)...`);
-
   await execAsync(
-    `ffmpeg -ss ${start} -i "${videoPath}" -t ${duration} -c:v libx264 -c:a aac -movflags +faststart "${outputPath}" -y`
+    `ffmpeg -ss ${start} -i "${videoPath}" -t ${duration} -c:v libx264 -c:a aac -movflags +faststart "${outputPath}" -y`,
+    { maxBuffer: 1024 * 1024 * 50 }
   );
-
-  log(jobId, `Clip ${index} created.`);
 };
 
-/* -------------------------------- */
-/* WORKER                           */
-/* -------------------------------- */
+/* ------------------ WORKER LOOP ------------------ */
 
 const startWorker = async () => {
-  console.log("Worker started and waiting for jobs...");
+  console.log(`Worker started for role: ${role}`);
   ensureFolders();
+
+  const queueName = `queue:${role}`;
 
   while (true) {
     let jobId: string | null = null;
 
     try {
-      const job = await redis.brpop("jobQueue", 0);
+      const job = await redis.brpop(queueName, 0);
       if (!job) continue;
 
       jobId = job[1];
-      log(jobId, "Job received from queue.");
+      log(jobId, "Job received.");
 
       const result = await pool.query(
         `SELECT * FROM jobs WHERE id = $1`,
@@ -147,139 +112,157 @@ const startWorker = async () => {
       );
 
       const jobData = result.rows[0];
-      if (!jobData) {
-        log(jobId, "Job not found in database.");
-        continue;
-      }
+      if (!jobData) continue;
 
-      await pool.query(
-        `UPDATE jobs SET status = 'processing' WHERE id = $1`,
-        [jobId]
-      );
-
-      log(jobId, "Status updated to processing.");
-
-      /* -------- PIPELINE -------- */
-
-      const videoPath = await downloadVideo(jobData.url, jobId);
-      const audioPath = await extractAudio(videoPath, jobId);
-      const transcriptPath = await transcribeAudio(audioPath, jobId);
-
-      log(jobId, "Reading transcript file...");
-      const transcriptRaw = fs.readFileSync(transcriptPath, "utf-8");
-      const transcriptJson = JSON.parse(transcriptRaw);
-      const transcriptText: string = transcriptJson.text;
-
-      /* -------- CLIP COUNT -------- */
-
-      const clipCount =
-        typeof jobData.clip_count === "number" &&
-        jobData.clip_count > 0
-          ? jobData.clip_count
-          : 3;
-
-      log(jobId, `Requested clip count: ${clipCount}`);
-
-      /* -------- GEMINI -------- */
-
-      log(jobId, "Sending transcript to Gemini...");
-
-      let highlights: Highlight[] = [];
-
-      try {
-        const parsed = await detectHighlightsWithGemini(
-          transcriptText,
-          clipCount
+      /* ------------ DOWNLOAD ROLE ------------ */
+      if (role === "download") {
+        await pool.query(
+          `UPDATE jobs SET status = 'downloading' WHERE id = $1`,
+          [jobId]
         );
 
-        if (Array.isArray(parsed)) {
-          highlights = parsed.filter(
-            (clip: any) =>
-              typeof clip.start === "number" &&
-              typeof clip.end === "number" &&
-              clip.end > clip.start
-          );
-        }
-      } catch (e) {
-        log(jobId, "Gemini error occurred.");
-      }
+        const videoPath = await downloadVideo(jobData.url, jobId);
+        const audioPath = await extractAudio(videoPath, jobId);
 
-      highlights = highlights.slice(0, clipCount);
-
-      log(jobId, `Gemini returned ${highlights.length} clips.`);
-
-      /* -------- SAVE HIGHLIGHTS -------- */
-
-      const highlightsPath = path.join(
-        "storage/highlights",
-        `${jobId}.json`
-      );
-
-      fs.writeFileSync(
-        highlightsPath,
-        JSON.stringify(highlights, null, 2)
-      );
-
-      log(jobId, "Highlights saved to storage.");
-
-      /* -------- CUT CLIPS -------- */
-
-      const clipsDir = path.join("storage/clips", jobId);
-      fs.mkdirSync(clipsDir, { recursive: true });
-
-      const generatedClips: string[] = [];
-
-      for (let i = 0; i < highlights.length; i++) {
-        const clip = highlights[i];
-
-        const outputClipPath = path.join(
-          clipsDir,
-          `clip_${i + 1}.mp4`
+        await pool.query(
+          `UPDATE jobs SET video_path = $1, audio_path = $2 WHERE id = $3`,
+          [videoPath, audioPath, jobId]
         );
 
-        await cutClip(
-          videoPath,
-          clip.start,
-          clip.end,
-          outputClipPath,
-          jobId,
-          i + 1
-        );
-
-        generatedClips.push(outputClipPath);
+        await redis.lpush("queue:transcribe", jobId);
+        log(jobId, "Moved to transcribe queue.");
       }
 
-      /* -------- UPDATE DB -------- */
+      /* ------------ TRANSCRIBE ROLE ------------ */
+      if (role === "transcribe") {
+        await pool.query(
+          `UPDATE jobs SET status = 'transcribing' WHERE id = $1`,
+          [jobId]
+        );
 
-      await pool.query(
-        `UPDATE jobs
-         SET status = 'completed',
-             transcript_path = $1,
-             highlights_path = $2,
-             clips_path = $3,
-             completed_at = NOW()
-         WHERE id = $4`,
-        [
-          transcriptPath,
-          highlightsPath,
-          JSON.stringify(generatedClips),
+        const audioPath = jobData.audio_path; // DB se lo
+
+        const transcriptPath = await transcribeAudio(
+          audioPath,
           jobId
-        ]
-      );
+        );
 
-      log(jobId, "Database updated.");
-      log(jobId, "Job completed successfully.");
-      console.log("--------------------------------------------------");
+        await pool.query(
+          `UPDATE jobs SET transcript_path = $1 WHERE id = $2`,
+          [transcriptPath, jobId]
+        );
+
+        await redis.lpush("queue:render", jobId);
+        log(jobId, "Moved to render queue.");
+      }
+
+      /* ------------ RENDER ROLE ------------ */
+      if (role === "render") {
+        await pool.query(
+          `UPDATE jobs SET status = 'rendering' WHERE id = $1`,
+          [jobId]
+        );
+
+        const transcriptPath = jobData.transcript_path;
+
+        const transcriptRaw = fs.readFileSync(
+          transcriptPath,
+          "utf-8"
+        );
+
+        const transcriptJson = JSON.parse(transcriptRaw);
+        const transcriptText: string = transcriptJson.text;
+
+        const clipCount =
+          typeof jobData.clip_count === "number" &&
+          jobData.clip_count > 0
+            ? jobData.clip_count
+            : 3;
+
+        let highlights: Highlight[] = [];
+
+        try {
+          const parsed = await detectHighlightsWithGemini(
+            transcriptText,
+            clipCount
+          );
+
+          if (Array.isArray(parsed)) {
+            highlights = parsed.filter(
+              (clip: any) =>
+                typeof clip.start === "number" &&
+                typeof clip.end === "number" &&
+                clip.end > clip.start
+            );
+          }
+        } catch (e) {
+          log(jobId, "Gemini error.");
+        }
+
+        highlights = highlights.slice(0, clipCount);
+
+        const highlightsPath = path.join(
+          "storage/highlights",
+          `${jobId}.json`
+        );
+
+        fs.writeFileSync(
+          highlightsPath,
+          JSON.stringify(highlights, null, 2)
+        );
+
+        const videoPath = jobData.video_path;
+
+        const clipsDir = path.join(
+          "storage/clips",
+          jobId
+        );
+
+        fs.mkdirSync(clipsDir, { recursive: true });
+
+        const generatedClips: string[] = [];
+
+        for (let i = 0; i < highlights.length; i++) {
+          const outputClipPath = path.join(
+            clipsDir,
+            `clip_${i + 1}.mp4`
+          );
+
+          await cutClip(
+            videoPath,
+            highlights[i].start,
+            highlights[i].end,
+            outputClipPath
+          );
+
+          generatedClips.push(outputClipPath);
+        }
+
+        await pool.query(
+          `UPDATE jobs
+           SET status = 'completed',
+               highlights_path = $1,
+               clips_path = $2,
+               completed_at = NOW()
+           WHERE id = $3`,
+          [
+            highlightsPath,
+            JSON.stringify(generatedClips),
+            jobId,
+          ]
+        );
+
+        log(jobId, "Job completed.");
+      }
 
     } catch (err) {
-      console.error("Worker error:", err);
+      console.error(`[${role}] Worker error for job ${jobId}`, err);
 
       if (jobId) {
         await pool.query(
           `UPDATE jobs SET status = 'failed' WHERE id = $1`,
           [jobId]
         );
-        log(jobId, "Job marked as failed.");
       }
     }
   }

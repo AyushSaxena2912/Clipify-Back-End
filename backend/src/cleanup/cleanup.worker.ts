@@ -5,8 +5,8 @@ import { pool } from "../db/pool";
 const STORAGE_ROOT = path.resolve(process.cwd(), "storage");
 
 // ✅ 15 minutes test mode
-const EXPIRY_TIME = 15 * 60 * 1000;
-// const EXPIRY_TIME = 24 * 60 * 60 * 1000;
+// const EXPIRY_TIME =  * 60 * 1000;
+const EXPIRY_TIME = 24 * 60 * 60 * 1000;
 
 /* ---------------------------- */
 /* SAFE DELETE HELPER           */

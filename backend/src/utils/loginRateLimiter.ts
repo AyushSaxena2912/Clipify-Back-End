@@ -31,3 +31,4 @@ export const resetLoginAttempts = async (email: string) => {
   const key = `login_attempts:${email}`;
   await redis.del(key);
 };
+
