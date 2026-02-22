@@ -1,0 +1,284 @@
+.otp-container {
+
+min-height: 100vh;
+
+display: flex;
+
+align-items: center;
+
+justify-content: center;
+
+background: var(--bg-dark);
+
+position: relative;
+
+overflow: hidden;
+
+padding: 20px;
+
+}
+
+
+/* background glow same as auth */
+
+.otp-container::before {
+
+content: '';
+
+position: absolute;
+
+top: -50%;
+
+right: -20%;
+
+width: 80%;
+
+height: 80%;
+
+background: radial-gradient(circle, rgba(37, 99, 235, 0.15) 0%, transparent 70%);
+
+border-radius: 50%;
+
+filter: blur(60px);
+
+}
+
+
+.otp-container::after {
+
+content: '';
+
+position: absolute;
+
+bottom: -50%;
+
+left: -20%;
+
+width: 80%;
+
+height: 80%;
+
+background: radial-gradient(circle, rgba(59, 130, 246, 0.15) 0%, transparent 70%);
+
+border-radius: 50%;
+
+filter: blur(60px);
+
+}
+
+
+
+/* card */
+
+.otp-card {
+
+width: 100%;
+
+max-width: 420px;
+
+background: var(--bg-card);
+
+border-radius: var(--radius-lg);
+
+padding: 40px;
+
+border: 1px solid var(--border);
+
+box-shadow: var(--shadow-lg);
+
+text-align: center;
+
+position: relative;
+
+z-index: 1;
+
+animation: fadeIn 0.5s ease;
+
+}
+
+
+
+/* title */
+
+.otp-card h2 {
+
+color: var(--text-primary);
+
+margin-bottom: 10px;
+
+font-weight: 600;
+
+background: linear-gradient(135deg, #ffffff 0%, #90caf9 50%, #42a5f5 100%);
+
+-webkit-background-clip: text;
+
+-webkit-text-fill-color: transparent;
+
+}
+
+
+
+/* subtitle */
+
+.otp-card p {
+
+color: var(--text-secondary);
+
+font-size: 14px;
+
+margin-bottom: 25px;
+
+}
+
+
+
+/* input */
+
+.otp-card input {
+
+width: 100%;
+
+padding: 14px;
+
+background: var(--bg-input);
+
+border: 1px solid var(--border);
+
+border-radius: var(--radius-md);
+
+color: var(--text-primary);
+
+font-size: 22px;
+font-family: Baghdad;
+
+text-align: center;
+
+letter-spacing: 8px;
+
+transition: var(--transition);
+
+}
+
+
+
+/* input hover */
+
+.otp-card input:hover {
+
+background: var(--bg-hover);
+
+border-color: var(--border-light);
+
+}
+
+
+
+/* input focus */
+
+.otp-card input:focus {
+
+outline: none;
+
+border-color: var(--primary);
+
+background: var(--bg-hover);
+
+box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.2);
+
+}
+
+
+
+/* button */
+
+.otp-card button {
+
+width: 100%;
+
+margin-top: 20px;
+
+padding: 14px;
+
+background: var(--primary);
+
+border: none;
+
+border-radius: var(--radius-md);
+
+color: white;
+
+font-weight: 600;
+
+font-size: 16px;
+
+cursor: pointer;
+
+transition: var(--transition);
+
+}
+
+
+
+/* button hover */
+
+.otp-card button:hover {
+
+background: var(--primary-dark);
+
+transform: translateY(-2px);
+
+box-shadow: var(--shadow-blue);
+
+}
+
+
+
+/* success */
+
+.otp-message.success {
+
+color: #22c55e;
+
+margin-top: 20px;
+
+font-weight: 600;
+
+}
+
+
+
+/* error */
+
+.otp-message.error {
+
+color: #ef4444;
+
+margin-top: 20px;
+
+font-weight: 600;
+
+}
+
+
+
+/* animation */
+
+@keyframes fadeIn {
+
+from {
+
+opacity: 0;
+
+transform: translateY(20px);
+
+}
+
+to {
+
+opacity: 1;
+
+transform: translateY(0);
+
+}
+
+}
