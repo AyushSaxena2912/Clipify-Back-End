@@ -1,4 +1,5 @@
 import { Response } from "express";
+import Redis from "ioredis";
 import { checkJobRateLimit } from "../../utils/jobRateLimiter";
 import {
   createJob,
@@ -32,7 +33,6 @@ export const handleCreateJob = async (
       });
     }
 
-    // Rate limit check (10 per hour)
     const allowed = await checkJobRateLimit(userId);
     if (!allowed) {
       return res.status(429).json({
@@ -79,13 +79,6 @@ export const handleGetJob = async (
       return res.status(401).json({
         success: false,
         message: "Unauthorized"
-      });
-    }
-
-    if (!id) {
-      return res.status(400).json({
-        success: false,
-        message: "Job ID is required"
       });
     }
 
@@ -145,4 +138,57 @@ export const handleGetAllJobs = async (
       message: "Internal server error"
     });
   }
+};
+
+
+/* --------------------------- */
+/* 🔥 SSE STREAM (REAL-TIME)  */
+/* --------------------------- */
+export const handleJobStream = async (
+  req: AuthRequest,
+  res: Response
+) => {
+  const userId = req.user?.userId;
+  const { id } = req.params;
+
+  if (!userId) {
+    return res.status(401).json({ message: "Unauthorized" });
+  }
+
+  // SSE headers
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+
+  const channel = `job:${id}`;
+
+  // 🔥 Dedicated Redis subscriber for this connection
+  const subscriber = new Redis({
+    host: "127.0.0.1",
+    port: 6379,
+  });
+
+  await subscriber.subscribe(channel);
+
+  subscriber.on("message", async (chan, message) => {
+    if (chan === channel) {
+      res.write(`data: ${message}\n\n`);
+
+      const parsed = JSON.parse(message);
+
+      if (
+        parsed.status === "completed" ||
+        parsed.status === "failed"
+      ) {
+        await subscriber.unsubscribe(channel);
+        await subscriber.quit();
+        res.end();
+      }
+    }
+  });
+
+  req.on("close", async () => {
+    await subscriber.unsubscribe(channel);
+    await subscriber.quit();
+  });
 };

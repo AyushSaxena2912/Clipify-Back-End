@@ -12,6 +12,7 @@ const app = express();
 app.use(
   cors({
     origin: "http://localhost:5173",
+    credentials: true, // 🔥 important for auth cookies (future safe)
     methods: ["GET", "POST", "PUT", "DELETE"],
     allowedHeaders: ["Content-Type", "Authorization"],
   })
@@ -27,7 +28,6 @@ app.use(express.json());
 /* -------------------- */
 /*   Routes             */
 /* -------------------- */
-
 app.use("/auth", authRoutes);
 app.use("/jobs", jobRoutes);
 
@@ -61,15 +61,15 @@ app.use((_req, res) => {
 /* -------------------- */
 app.use(
   (
-    err: Error,
+    err: any,
     _req: express.Request,
     res: express.Response,
     _next: express.NextFunction
   ) => {
     console.error("Unhandled Error:", err.message);
-    res.status(500).json({
+    res.status(err.statusCode || 500).json({
       success: false,
-      message: "Internal server error",
+      message: err.message || "Internal server error",
     });
   }
 );

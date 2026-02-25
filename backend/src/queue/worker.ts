@@ -7,7 +7,6 @@ import { pool } from "../db/pool";
 import { detectHighlightsWithGemini } from "../ai/gemini";
 
 const execAsync = promisify(exec);
-
 const role = process.argv[2];
 
 if (!["download", "transcribe", "render"].includes(role)) {
@@ -24,6 +23,13 @@ const log = (jobId: string, message: string) => {
   console.log(`[${role.toUpperCase()}][JOB ${jobId}] ${message}`);
 };
 
+const publishStatus = async (jobId: string, status: string) => {
+  await redis.publish(
+    `job:${jobId}`,
+    JSON.stringify({ status })
+  );
+};
+
 const ensureFolders = () => {
   const folders = [
     "storage/videos",
@@ -38,54 +44,6 @@ const ensureFolders = () => {
       fs.mkdirSync(folder, { recursive: true });
     }
   });
-};
-
-/* ------------------ HELPERS ------------------ */
-
-const downloadVideo = async (url: string, jobId: string) => {
-  const outputPath = path.join("storage/videos", `${jobId}.mp4`);
-  await execAsync(
-    `yt-dlp -f mp4 -o "${outputPath}" "${url}"`,
-    { maxBuffer: 1024 * 1024 * 50 }
-  );
-  return outputPath;
-};
-
-const extractAudio = async (videoPath: string, jobId: string) => {
-  const audioPath = path.join("storage/audio", `${jobId}.mp3`);
-  await execAsync(
-    `ffmpeg -i "${videoPath}" -vn -acodec libmp3lame "${audioPath}" -y`,
-    { maxBuffer: 1024 * 1024 * 50 }
-  );
-  return audioPath;
-};
-
-const transcribeAudio = async (audioPath: string, jobId: string) => {
-  const transcriptPath = path.join(
-    "storage/transcripts",
-    `${jobId}.json`
-  );
-
-  await execAsync(
-    `venv/bin/python scripts/transcribe.py "${audioPath}" "${transcriptPath}"`,
-    { maxBuffer: 1024 * 1024 * 50 }
-  );
-
-  return transcriptPath;
-};
-
-const cutClip = async (
-  videoPath: string,
-  start: number,
-  end: number,
-  outputPath: string
-) => {
-  const duration = end - start;
-
-  await execAsync(
-    `ffmpeg -ss ${start} -i "${videoPath}" -t ${duration} -c:v libx264 -c:a aac -movflags +faststart "${outputPath}" -y`,
-    { maxBuffer: 1024 * 1024 * 50 }
-  );
 };
 
 /* ------------------ WORKER LOOP ------------------ */
@@ -121,12 +79,21 @@ const startWorker = async () => {
           [jobId]
         );
 
-        const videoPath = await downloadVideo(jobData.url, jobId);
-        const audioPath = await extractAudio(videoPath, jobId);
+        await publishStatus(jobId, "downloading");
+
+        const videoPath = await execAsync(
+          `yt-dlp -f mp4 -o "storage/videos/${jobId}.mp4" "${jobData.url}"`
+        );
+
+        const audioPath = `storage/audio/${jobId}.mp3`;
+
+        await execAsync(
+          `ffmpeg -i "storage/videos/${jobId}.mp4" -vn -acodec libmp3lame "${audioPath}" -y`
+        );
 
         await pool.query(
           `UPDATE jobs SET video_path = $1, audio_path = $2 WHERE id = $3`,
-          [videoPath, audioPath, jobId]
+          [`storage/videos/${jobId}.mp4`, audioPath, jobId]
         );
 
         await redis.lpush("queue:transcribe", jobId);
@@ -140,11 +107,12 @@ const startWorker = async () => {
           [jobId]
         );
 
-        const audioPath = jobData.audio_path; // DB se lo
+        await publishStatus(jobId, "transcribing");
 
-        const transcriptPath = await transcribeAudio(
-          audioPath,
-          jobId
+        const transcriptPath = `storage/transcripts/${jobId}.json`;
+
+        await execAsync(
+          `venv/bin/python scripts/transcribe.py "${jobData.audio_path}" "${transcriptPath}"`
         );
 
         await pool.query(
@@ -163,10 +131,10 @@ const startWorker = async () => {
           [jobId]
         );
 
-        const transcriptPath = jobData.transcript_path;
+        await publishStatus(jobId, "rendering");
 
         const transcriptRaw = fs.readFileSync(
-          transcriptPath,
+          jobData.transcript_path,
           "utf-8"
         );
 
@@ -201,38 +169,24 @@ const startWorker = async () => {
 
         highlights = highlights.slice(0, clipCount);
 
-        const highlightsPath = path.join(
-          "storage/highlights",
-          `${jobId}.json`
-        );
-
+        const highlightsPath = `storage/highlights/${jobId}.json`;
         fs.writeFileSync(
           highlightsPath,
           JSON.stringify(highlights, null, 2)
         );
 
-        const videoPath = jobData.video_path;
-
-        const clipsDir = path.join(
-          "storage/clips",
-          jobId
-        );
-
+        const clipsDir = `storage/clips/${jobId}`;
         fs.mkdirSync(clipsDir, { recursive: true });
 
         const generatedClips: string[] = [];
 
         for (let i = 0; i < highlights.length; i++) {
-          const outputClipPath = path.join(
-            clipsDir,
-            `clip_${i + 1}.mp4`
-          );
+          const outputClipPath = `${clipsDir}/clip_${i + 1}.mp4`;
 
-          await cutClip(
-            videoPath,
-            highlights[i].start,
-            highlights[i].end,
-            outputClipPath
+          await execAsync(
+            `ffmpeg -ss ${highlights[i].start} -i "${jobData.video_path}" -t ${
+              highlights[i].end - highlights[i].start
+            } -c:v libx264 -c:a aac -movflags +faststart "${outputClipPath}" -y`
           );
 
           generatedClips.push(outputClipPath);
@@ -252,6 +206,8 @@ const startWorker = async () => {
           ]
         );
 
+        await publishStatus(jobId, "completed");
+
         log(jobId, "Job completed.");
       }
 
@@ -263,6 +219,8 @@ const startWorker = async () => {
           `UPDATE jobs SET status = 'failed' WHERE id = $1`,
           [jobId]
         );
+
+        await publishStatus(jobId, "failed");
       }
     }
   }

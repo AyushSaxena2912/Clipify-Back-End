@@ -28,15 +28,26 @@ export const authenticate = (
 ) => {
   try {
     if (!process.env.JWT_SECRET) {
-      throw new Error("JWT_SECRET is not defined");
+      console.error("JWT_SECRET missing in environment");
+      return res.status(500).json({
+        success: false,
+        message: "Server configuration error",
+      });
     }
 
     const authHeader = req.headers.authorization;
 
-    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    if (!authHeader) {
       return res.status(401).json({
         success: false,
-        message: "Unauthorized - No token provided",
+        message: "Unauthorized - Token missing",
+      });
+    }
+
+    if (!authHeader.startsWith("Bearer ")) {
+      return res.status(401).json({
+        success: false,
+        message: "Unauthorized - Invalid token format",
       });
     }
 
@@ -50,6 +61,7 @@ export const authenticate = (
     req.user = decoded;
 
     next();
+
   } catch (error) {
     return res.status(401).json({
       success: false,
